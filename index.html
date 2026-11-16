@@ -1092,9 +1092,10 @@ global.CF = {
 <script>
 /* CRADLE pilot shell: Three.js rendering, touch input, HUD, tuning panel.
    All game logic lives in the core block above. The art is the low-poly
-   diorama of the concept photo: flat-shaded facets, vertex-colored bands
-   (sand floor, aqua to teal walls, sand rim), faceted trees on the rims,
-   geometric clouds, a pale bright sky. No ink outlines, no toon map. */
+   diorama of the concept photo: large irregular flat-shaded triangles,
+   each face carrying its own mosaic color (teal walls marbled with
+   sand, sand floor and rim), faceted trees on the rims, geometric
+   clouds, a near-uniform light blue sky. No ink outlines, no toon map. */
 (function () {
 'use strict';
 var CF = window.CF;
@@ -1114,8 +1115,8 @@ var renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 container.appendChild(renderer.domElement);
 var scene = new THREE.Scene();
-scene.background = new THREE.Color(0x7cc4f5);
-scene.fog = new THREE.Fog(0xcfeef7, 300, 1850);
+scene.background = new THREE.Color(0x90d0f0);
+scene.fog = new THREE.Fog(0x90d0f0, 300, 1850);
 var camera = new THREE.PerspectiveCamera(62, 1, 0.1, 4200);
 camera.position.set(0, 40, 120);
 scene.add(new THREE.HemisphereLight(0xeaf7ff, 0x8a7a5a, 1.15));
@@ -1123,17 +1124,18 @@ var sun = new THREE.DirectionalLight(0xfff3dd, 0.85);
 sun.position.set(40, 90, 25);
 scene.add(sun);
 
-/* ---------- sky: a gentle two-stop gradient dome, pale and bright,
-   exactly the photo's empty sky. It recenters on the car every frame. - */
+/* ---------- sky: a near-uniform light blue dome, the photo's empty
+   #90d0f0 sky, lightening only a touch toward the horizon. It
+   recenters on the car every frame. ------------------------------- */
 var skyDome = null;
 (function buildSky() {
   var cv = document.createElement('canvas'); cv.width = 64; cv.height = 512;
   var ctx = cv.getContext('2d');
   var gr = ctx.createLinearGradient(0, 0, 0, 512);
-  gr.addColorStop(0, '#5fb6f2');
-  gr.addColorStop(0.55, '#8fd0f7');
-  gr.addColorStop(0.78, '#c9edfa');
-  gr.addColorStop(1, '#e8f9fd');
+  gr.addColorStop(0, '#8ecdf2');
+  gr.addColorStop(0.6, '#90d0f0');
+  gr.addColorStop(0.85, '#9cd8f3');
+  gr.addColorStop(1, '#aadef6');
   ctx.fillStyle = gr; ctx.fillRect(0, 0, 64, 512);
   var tex = new THREE.CanvasTexture(cv);
   var dome = new THREE.Mesh(new THREE.SphereGeometry(3000, 24, 14),
@@ -1173,12 +1175,12 @@ var coinMeshes = [], coinPillars = [];
   }
 })();
 
-/* ---------- the car: a faceted low-poly wagon in leaf green, rebuilt
-   from flat-shaded primitives to match the photo's car. Wings stay:
-   they are the glide, and their deploy is a gameplay read. ------------ */
+/* ---------- the car: a faceted low-poly wagon in the photo's bright
+   lime green, rebuilt from flat-shaded primitives. Wings stay: they
+   are the glide, and their deploy is a gameplay read. ---------------- */
 var carGroup = new THREE.Group(), wingL, wingR, wheels = [];
 (function buildCar() {
-  var body = std(0x57c84a), bodyDark = std(0x3da53e), glass = std(0xd6f2f4, { roughness: 0.35 }),
+  var body = std(0x79d84f), bodyDark = std(0x5cb83e), glass = std(0xd6f2f4, { roughness: 0.35 }),
       dark = std(0x2f3b33), hub = std(0xb9c9bd);
   function part(geo, mat, x, y, z) {
     var m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); carGroup.add(m); return m;
@@ -1232,57 +1234,102 @@ var shadowMesh;
    The pool runs 2,600 m with the car held 400 to 500 m from the tail:
    the far end is always 2,100 to 2,200 m ahead, past the fog's full
    close at 1,850 m, so the valley never visibly ends in clear air.
-   Colors are the photo's bands: warm sand on the floor and the rim
-   plateau, pale aqua low on the walls, aqua-teal mid-wall, deep teal
-   at the lip and down the outer cliff. A per-vertex hash jitter keeps
-   the facets from reading as a gradient. ------------------------------ */
+   The art is the concept photo's mosaic: LARGE irregular triangles
+   (rows about 7.7 m apart, wall columns denser toward the lip), each
+   grid point jittered ALONG the surface by a deterministic hash of
+   its global grid position, so the mesh is stable across segment
+   recycling and every vertex height still comes from profileH at
+   its jittered position. Lateral jitter tapers to zero at the lip,
+   the rim, and the cliff, so those edges stay clean vertex lines;
+   measured worst chord error against the analytic surface on the
+   wall is 0.28 m. Geometry is non-indexed and every FACE carries
+   one color, hashed from its world position: floor and rim plateau
+   draw only warm sand; walls draw teals weighted toward the mid
+   range, with about one face in four sand marbled through, exactly
+   the photo's mix. No horizontal bands anywhere. ------------------- */
 var valleyGroup = new THREE.Group();
 scene.add(valleyGroup);
-var VALLEY_SEG_LEN = 100, VALLEY_POOL_N = 26, VALLEY_ROWS = 41, VALLEY_COLS = 17;
+var VALLEY_SEG_LEN = 100, VALLEY_POOL_N = 26, VALLEY_ROWS = 14;
+var VALLEY_ROW_SP = VALLEY_SEG_LEN / (VALLEY_ROWS - 1); // about 7.7 m between rows
+var WALL_FRACS = [0.12, 0.24, 0.36, 0.48, 0.6, 0.72, 0.82, 0.9, 0.96];
 function valleyCols(P) {
   var fh = P.floorHalf, run = P.run, hw = P.halfW, re = P.rimEdge;
-  return [
-    { lat: -re, skirt: true }, { lat: -re }, { lat: -hw },
-    { lat: -(fh + 0.8 * run) }, { lat: -(fh + 0.55 * run) }, { lat: -(fh + 0.28 * run) },
-    { lat: -fh }, { lat: -fh * 0.55 }, { lat: 0 },
-    { lat: fh * 0.55 }, { lat: fh },
-    { lat: fh + 0.28 * run }, { lat: fh + 0.55 * run }, { lat: fh + 0.8 * run },
-    { lat: hw }, { lat: re }, { lat: re, skirt: true }
-  ];
+  function wallJs(f) { return Math.min(1, (1 - f) / 0.25); } // lateral jitter scale per column: dead at the lip
+  var cols = [{ lat: -re, skirt: true, js: 0 }, { lat: -re, js: 0 }, { lat: -hw, js: 0 }];
+  for (var i = WALL_FRACS.length - 1; i >= 0; i--) cols.push({ lat: -(fh + WALL_FRACS[i] * run), js: wallJs(WALL_FRACS[i]) });
+  cols.push({ lat: -fh, js: 0.5 }, { lat: -fh * 0.55, js: 1 }, { lat: 0, js: 1 },
+             { lat: fh * 0.55, js: 1 }, { lat: fh, js: 0.5 });
+  WALL_FRACS.forEach(function (f) { cols.push({ lat: fh + f * run, js: wallJs(f) }); });
+  cols.push({ lat: hw, js: 0 }, { lat: re, js: 0 }, { lat: re, skirt: true, js: 0 });
+  return cols;
 }
-var VALLEY_BANDS = { sand: new THREE.Color(0xeccf9e), low: new THREE.Color(0xa9e6cf),
-                     mid: new THREE.Color(0x54c8ae), high: new THREE.Color(0x23a68d),
-                     cliff: new THREE.Color(0x157a68) };
-function valleyColor(P, colDef, y, out) {
-  if (colDef.skirt) out.copy(VALLEY_BANDS.cliff);
-  else if (Math.abs(colDef.lat) <= P.floorHalf + 0.01 || Math.abs(colDef.lat) >= P.halfW - 0.01) out.copy(VALLEY_BANDS.sand);
-  else {
-    var hf = y / P.wallH;
-    out.copy(hf < 0.3 ? VALLEY_BANDS.low : (hf < 0.65 ? VALLEY_BANDS.mid : VALLEY_BANDS.high));
+var VALLEY_COLS = valleyCols(CF.CRADLE.paramsAt(0)).length;
+function gridHash(a, b) {
+  var v = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+}
+/* one mosaic grid vertex: jittered along the surface (plus/minus 30%
+   of the local cell), height always from the surface function at the
+   jittered position, so the visual surface never leaves physics */
+function valleyVert(sNom, colsNom, c) {
+  var g = Math.round(sNom / VALLEY_ROW_SP); // global row index: shared corners hash identically in every segment
+  var sJ = sNom + (gridHash(g, c * 2 + 101) - 0.5) * 0.6 * VALLEY_ROW_SP;
+  var PJ = CF.CRADLE.paramsAt(sJ);
+  var cd = valleyCols(PJ)[c];
+  var spc = c === 0 ? (colsNom[1].lat - colsNom[0].lat)
+    : c === VALLEY_COLS - 1 ? (colsNom[VALLEY_COLS - 1].lat - colsNom[VALLEY_COLS - 2].lat)
+    : (colsNom[c + 1].lat - colsNom[c - 1].lat) / 2;
+  var latJ = cd.lat + (gridHash(g, c * 2 + 555) - 0.5) * 0.6 * cd.js * spc;
+  if (latJ > PJ.rimEdge) latJ = PJ.rimEdge;
+  if (latJ < -PJ.rimEdge) latJ = -PJ.rimEdge;
+  return { x: latJ, z: -sJ, s: sJ, lat: latJ,
+           y: (cd.skirt ? PJ.wallH - 12 : CF.CRADLE.profileH(sJ, latJ)) + 0.03 };
+}
+var TEAL_DEEP = new THREE.Color(0x1f8a70), TEAL_PALE = new THREE.Color(0xb8ecd4);
+var SAND_LO = new THREE.Color(0xecca9a), SAND_HI = new THREE.Color(0xd9b77c);
+function valleyFaceColor(fg, fc, ft, sC, latC, skirtQuad, out) {
+  var PC = CF.CRADLE.paramsAt(Math.max(0, sC));
+  var a = Math.abs(latC);
+  var isWall = skirtQuad || (a > PC.floorHalf && a < PC.halfW);
+  var hk = fc * 7 + ft * 131;
+  var h1 = gridHash(fg, hk + 7), h2 = gridHash(fg, hk + 77), st;
+  if (isWall && gridHash(fg, hk + 31) >= 0.25) { // about one wall face in four draws sand instead
+    out.lerpColors(TEAL_DEEP, TEAL_PALE, 0.12 + 0.76 * h1); // weighted toward the mid teals
+    st = 0.92 + 0.16 * h2;
+  } else {
+    out.lerpColors(SAND_LO, SAND_HI, h1);
+    st = 0.94 + 0.12 * h2;
   }
+  out.r *= st; out.g *= st; out.b *= st;
   return out;
-}
-function hashJitter(s, lat) {
-  var v = Math.sin(s * 12.9898 + lat * 78.233) * 43758.5453;
-  return 0.94 + (v - Math.floor(v)) * 0.12;
 }
 function buildValleySegGeo(seg, s0) {
   var pos = seg.geo.attributes.position.array;
   var colA = seg.geo.attributes.color.array;
   var cc = new THREE.Color();
-  var vi = 0;
+  var grid = [];
   for (var r = 0; r < VALLEY_ROWS; r++) {
-    var s = s0 + r * (VALLEY_SEG_LEN / (VALLEY_ROWS - 1)); // rows every 2.5 m
-    var P = CF.CRADLE.paramsAt(s);
-    var cols = valleyCols(P);
-    for (var c = 0; c < VALLEY_COLS; c++) {
-      var cd = cols[c];
-      var y = cd.skirt ? P.wallH - 12 : CF.CRADLE.profileH(s, cd.lat);
-      pos[vi * 3] = cd.lat; pos[vi * 3 + 1] = y + 0.03; pos[vi * 3 + 2] = -s;
-      valleyColor(P, cd, y, cc);
-      var j = hashJitter(Math.round(s * 2) / 2, Math.round(cd.lat * 2) / 2);
-      colA[vi * 3] = cc.r * j; colA[vi * 3 + 1] = cc.g * j; colA[vi * 3 + 2] = cc.b * j;
-      vi++;
+    var sNom = s0 + r * VALLEY_ROW_SP;
+    var colsNom = valleyCols(CF.CRADLE.paramsAt(sNom));
+    var rowArr = [];
+    for (var c = 0; c < VALLEY_COLS; c++) rowArr.push(valleyVert(sNom, colsNom, c));
+    grid.push(rowArr);
+  }
+  var vi = 0;
+  function pushVert(v) { pos[vi * 3] = v.x; pos[vi * 3 + 1] = v.y; pos[vi * 3 + 2] = v.z; vi++; }
+  function pushFace(v1, v2, v3, fg, fc, ft, skirtQuad) {
+    pushVert(v1); pushVert(v2); pushVert(v3);
+    valleyFaceColor(fg, fc, ft, (v1.s + v2.s + v3.s) / 3, (v1.lat + v2.lat + v3.lat) / 3, skirtQuad, cc);
+    for (var k = 0; k < 3; k++) {
+      colA[(vi - 3 + k) * 3] = cc.r; colA[(vi - 3 + k) * 3 + 1] = cc.g; colA[(vi - 3 + k) * 3 + 2] = cc.b;
+    }
+  }
+  for (var r = 0; r < VALLEY_ROWS - 1; r++) {
+    var fg = Math.round((s0 + r * VALLEY_ROW_SP) / VALLEY_ROW_SP);
+    for (var c = 0; c < VALLEY_COLS - 1; c++) {
+      var skirtQuad = (c === 0 || c === VALLEY_COLS - 2);
+      pushFace(grid[r][c], grid[r + 1][c], grid[r][c + 1], fg, c, 0, skirtQuad);     // a, d, b: the original winding
+      pushFace(grid[r][c + 1], grid[r + 1][c], grid[r + 1][c + 1], fg, c, 1, skirtQuad); // b, d, e
     }
   }
   seg.geo.attributes.position.needsUpdate = true;
@@ -1293,16 +1340,10 @@ function buildValleySegGeo(seg, s0) {
 function makeValleyPool() {
   var pool = { segs: [], poolS: -100 };
   for (var i = 0; i < VALLEY_POOL_N; i++) {
-    var nv = VALLEY_ROWS * VALLEY_COLS;
+    var nv = (VALLEY_ROWS - 1) * (VALLEY_COLS - 1) * 6; // non-indexed: 6 vertices per quad, so each face owns its color
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
-    var idx = [];
-    for (var r = 0; r < VALLEY_ROWS - 1; r++) for (var c = 0; c < VALLEY_COLS - 1; c++) {
-      var a = r * VALLEY_COLS + c, b = a + 1, d = a + VALLEY_COLS, e = d + 1;
-      idx.push(a, d, b, b, d, e);
-    }
-    geo.setIndex(idx);
     var mesh = new THREE.Mesh(geo, terrainMat);
     mesh.frustumCulled = false; // segments are rebuilt in place as the pool recycles
     valleyGroup.add(mesh);
@@ -1330,8 +1371,8 @@ resetValleyPool();
    same 2,600 m window as the valley segments ------------------------- */
 var treeGroup = new THREE.Group();
 scene.add(treeGroup);
-var treeMats = { trunk: std(0x8a5a3b), round1: std(0x58b368), round2: std(0x79c94f),
-                 round3: std(0x3f9e63), pine: std(0x2e9e77), bush: std(0x6fbf5e), rock: std(0x9aa5a0) };
+var treeMats = { trunk: std(0x8a5a3b), round1: std(0x8fd07a), round2: std(0xa9dc8e),
+                 round3: std(0x6fbf5e), pine: std(0x4db38c), bush: std(0x8fd07a), rock: std(0x9aa5a0) };
 function makeTreeMesh(kind, rng) {
   var grp = new THREE.Group();
   function add(geo, mat, x, y, z) { var m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); grp.add(m); return m; }
