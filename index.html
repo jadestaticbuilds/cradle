@@ -269,8 +269,8 @@
     <div id="comboLabel">COMBO</div>
   </div>
   <div class="hud" id="banner"></div>
-  <div class="hud touchHint" id="hintL">◀ DRAG: STEER / FLIP ▶</div>
-  <div class="hud touchHint" id="hintR">HOLD: STABILIZE / BRAKE</div>
+  <div class="hud touchHint" id="hintL">DRAG ANYWHERE: STEER / FLIP</div>
+  <div class="hud touchHint" id="hintR">2ND HOLD: STABILIZE</div>
 
   <div id="hbBtn">HB</div>
   <div class="steerBtn" id="steerL">◀</div>
@@ -307,8 +307,8 @@
 
   <div id="howtoPanel">
     <h3>HOW TO PLAY</h3>
-    <div class="hsec"><h4>DRIVE</h4><p>Drag on the left side of the screen to steer. The car accelerates on its own. Hold the lower right side to brake, and keep holding at a standstill to reverse. The HB button is a handbrake for tight turns.</p></div>
-    <div class="hsec"><h4>FLY</h4><p>The moment you leave the ground, that same drag becomes a flight stick. Drag down for a backflip, up for a front flip, sideways to roll, and diagonal for combos. Hold the right side to stabilize: your rotation settles, the car glides, and you can set it down level.</p></div>
+    <div class="hsec"><h4>DRIVE</h4><p>Drag anywhere on the screen to steer. The car accelerates on its own, and there is no speed limit: speed keeps building while your line is clean, and turning is what costs you speed, so carve gently and save the hard turns for when you mean them. The round HB button is the only brake there is, a handbrake for tight turns and hard stops. Only a press that starts on the button itself brakes; a steering drag that crosses it does nothing.</p></div>
+    <div class="hsec"><h4>FLY</h4><p>The moment you leave the ground, that same drag becomes a flight stick. Drag down for a backflip, up for a front flip, sideways to roll, and diagonal for combos. Hold a second finger down to stabilize: your rotation settles, the car glides, and you can set it down level.</p></div>
     <div class="hsec"><h4>SCORE</h4><p>Points stay pending while you are in the air and only bank when you land. Clean landings bank in full and grow the combo. A bad landing loses the whole air, but the car always rights itself and keeps rolling. Nothing stops you. Coins pay 250 each. Take off again within 3 seconds of landing to keep the combo alive.</p></div>
     <p class="hmode">THE VALLEY: one endless bowl, walls on both sides. Ride up one wall, launch off the lip, land on the far wall, and let every crossing throw you higher. The gold coins trace the riding lines. In the last minute the walls steepen, and the same lines throw you further. Over the rim is open sky and a long fall: you lose the air, and the run puts you back on the valley floor. Three minutes. Spend the height.</p>
     <button class="bigBtn" id="howtoClose">DONE</button>
@@ -367,8 +367,10 @@ var TUNE_DEFAULTS = {
   stabilize: 5,       // 0..10 panel scale, mapped internally
   cleanAngle: 12,     // degrees off level vs surface for a CLEAN landing
   badAngle: 30,       // degrees; beyond this the landing is BAD (no crash state: the car always keeps going)
-  grace: 3.0,         // seconds to take off again before the combo lapses
-  maxSpeed: 136       // m/s on the flat (Scale Pass: 4x the old 34)
+  grace: 3.0          // seconds to take off again before the combo lapses
+  // NO maxSpeed: George's rule (Control Pass) is that there is no speed
+  // limit. The engine pushes at a constant rate, gravity pays on every
+  // descent, and steering scrub (stepGround) is the only governor.
 };
 function makeTune(overrides) {
   var t = {}, k;
@@ -754,8 +756,9 @@ function createGame(tune) {
     if (car.rightT > 0) car.rightT = Math.max(0, car.rightT - dt);
     var auth = clamp(car.speed / 40, -1, 1);
     /* Speed-sensitive steering (Pete, Scale Pass): full authority up to
-       ~34 m/s, softening to ~55% at top speed so 136 m/s stays controllable
-       instead of twitchy. */
+       ~34 m/s, softening to ~55% by 136 m/s and holding there, so the
+       car stays controllable instead of twitchy as speed accumulates
+       past the old ceiling. */
     var steerSoft = 1 - 0.45 * clamp((Math.abs(car.speed) - 34) / 102, 0, 1);
     car.heading -= input.steer * 1.85 * steerSoft * (input.handbrake ? 1.6 : 1) * dt * auth;
     var n = car.surf;
@@ -769,31 +772,41 @@ function createGame(tune) {
       car.speed -= car.speed * 2.2 * dt;
       car.speed = car.speed > 0 ? Math.max(0, car.speed - 32 * dt) : Math.min(0, car.speed + 32 * dt);
     } else {
-      car.speed += 40 * (1 - car.speed / 164) * dt;
-      /* The 136 soft cap is an engine/aero cap for the flat and for climbs.
-         On a descent the slope feeds speed past it, so the cap rises with
-         the downhill tangent and gravity, not the cap, sets the terminal:
-         a 169 to 179 m/s equilibrium across the DOWN ribbon's 16 to 22
-         degrees, landing at about 165 to 175 in real driving once air
-         time and landings take their cut. (The engine asymptote moved
-         150 -> 164 with it; the flat/climb terminal is unchanged because
-         the 136 cap still binds there.) */
-      var capV = tune.maxSpeed + clamp(-fy, 0, 0.4) * 120;
-      if (car.speed > capV) car.speed = Math.max(capV, car.speed - 24 * dt);
+      /* No speed limit (George, Control Pass): constant engine thrust,
+         no asymptote, no soft cap, no ceiling clamp. Speed accumulates
+         as long as the line is clean; the steering scrub below and the
+         slopes are the only things that ever take it away. */
+      car.speed += 40 * dt;
+    }
+    /* Steering scrub: turning is the speed governor now. The bleed is
+       proportional to speed, grows with the CUBE of the steering input,
+       and itself grows with speed (the 0.5 + v/200 factor), so it is
+       self-regulating: a gentle line change costs almost nothing
+       (about 1.4% of speed per second at quarter lock at 100 m/s),
+       a half-lock carve costs about 11% per second, and a full-lock
+       carve at speed costs 90% per second and more, which is what
+       keeps wall-to-wall play in a working band with no ceiling.
+       Ground only: the flight stick is not a turn in this sense. */
+    var stAbs = Math.abs(input.steer);
+    if (stAbs > 0.01 && car.speed !== 0) {
+      car.speed -= car.speed * Math.min(0.9 * stAbs * stAbs * stAbs * (0.5 + Math.abs(car.speed) / 200) * dt, 0.5);
     }
     car.speed -= tune.gravity * fy * dt * 0.55; // slopes push back, descents pull
-    if (car.speed > 190) car.speed = 190;
-    if (car.speed < -48) car.speed = -48;
+    if (car.speed < -48) car.speed = -48; // reverse floor only; forward speed is unlimited
     /* Swept movement: the step is split so the car never travels more than
-       ~0.4m without a contact test, so no step size can tunnel it through a
-       kicker side or a ribbon edge. Contact SLIDES (see stepGroundMove):
-       only the movement into the surface is removed, the car keeps its
-       speed along the surface, and car.speed is never touched by contact. */
+       ~0.4m (full 3D tangent travel, wall climbs included) without a
+       contact test, so no step size can tunnel it through a kicker side
+       or a ribbon edge. With no speed limit (Control Pass) the substep
+       count scales with speed instead of the speed bending to the count:
+       the guard sits at 1024 substeps, about 400 m of travel per step.
+       Contact SLIDES (see stepGroundMove): only the movement into the
+       surface is removed, the car keeps its speed along the surface,
+       and car.speed is never touched by contact. */
     var remaining = dt, guard = 0;
-    while (remaining > 1e-9 && car.mode === 'ground' && guard++ < 48) {
+    while (remaining > 1e-9 && car.mode === 'ground' && guard++ < 1024) {
       var tv0 = tangentVelocity(car.surf, car.heading, car.speed);
-      var planSpd = Math.sqrt(tv0.x * tv0.x + tv0.z * tv0.z);
-      var sdt = planSpd > 1e-6 ? Math.min(remaining, 0.4 / planSpd) : remaining;
+      var tvSpd = Math.sqrt(tv0.x * tv0.x + tv0.y * tv0.y + tv0.z * tv0.z);
+      var sdt = tvSpd > 1e-6 ? Math.min(remaining, 0.4 / tvSpd) : remaining;
       stepGroundMove(sdt);
       remaining -= sdt;
     }
@@ -905,13 +918,13 @@ function createGame(tune) {
          groundSetQ slerp it back onto its wheels while it moves. */
       var planSpd = Math.sqrt(car.vx * car.vx + car.vz * car.vz);
       if (planSpd > 2) car.heading = Math.atan2(car.vx, car.vz);
-      car.speed = clamp(0.75 * planSpd, 0, 190);
+      car.speed = Math.max(0, 0.75 * planSpd); // keeps 75%, no ceiling (Control Pass)
       car.mode = 'ground'; car.rightT = 0.45;
     } else {
       var f = qRotate(car.q, v3(0, 0, -1));
       car.heading = Math.atan2(f.x, f.z);
       var fh = Math.sqrt(f.x * f.x + f.z * f.z) || 1;
-      car.speed = clamp(car.vx * (f.x / fh) + car.vz * (f.z / fh), -48, 190);
+      car.speed = Math.max(-48, car.vx * (f.x / fh) + car.vz * (f.z / fh)); // reverse floor only
       car.mode = 'ground';
       car.q = groundQuat(car.heading, s.nx, s.ny, s.nz);
     }
@@ -962,7 +975,9 @@ function createGame(tune) {
     var gEff = tune.gravity * (input.stabilize ? 0.75 : 1); // stabilize glides: falls ~25% slower
     car.vy -= gEff * dt;
     if (input.stabilize) { var dr = Math.max(0, 1 - 0.08 * dt); car.vx *= dr; car.vz *= dr; }
-    /* Substepped move (max ~0.4m of travel per substep) so a fast car can
+    /* Substepped move (max ~0.4m of TOTAL travel per substep, vertical
+       fall included, so the substep count scales with the real speed
+       now that speed has no ceiling) so a fast car can
        never tunnel through a surface between frames. Two ways to meet the
        valley surface: cross it from above (a touchdown, judged by land()),
        or meet its rising wall from the front, which is also a touchdown.
@@ -971,7 +986,7 @@ function createGame(tune) {
        extended-plane guard below (the pre-move bottom must have been at
        or above the surface plane extended sideways) makes land()
        unreachable from inside the volume. The valley is solid. */
-    var distA = Math.sqrt(car.vx * car.vx + car.vz * car.vz) * dt;
+    var distA = Math.sqrt(car.vx * car.vx + car.vy * car.vy + car.vz * car.vz) * dt;
     var nSub = Math.max(1, Math.ceil(distA / 0.4)), sdt = dt / nSub, si;
     for (si = 0; si < nSub; si++) {
       var spx = car.x, spz = car.z;
@@ -1587,7 +1602,7 @@ window.addEventListener('deviceorientation', function (e) {
 
 /* ---------- game + best ---------- */
 var game = CF.createGame(tune);
-window.CFDebug = { camera: camera, game: game }; // test hook: tools/smoke.js asserts the shipped camera's framing geometrically
+window.CFDebug = { camera: camera, game: game, input: function () { return buildInput(); } }; // test hook: tools/smoke.js asserts the shipped camera's framing geometrically and the shipped input mapping directly
 var crBest = 0;
 (function loadBest() {
   var b = parseFloat(localStorage.getItem('cr-best') || '0');
@@ -1599,24 +1614,34 @@ function syncMenuBest() {
 }
 syncMenuBest();
 
-/* ---------- input: multi-touch drag + brake/stabilize, keyboard fallback ---------- */
-var leftPtr = null, rightPtr = null, hbOn = false, tapQueued = false;
+/* ---------- input: one drag anywhere steers, the HB circle is the only
+   brake, keyboard fallback -------------------------------------------
+   Control Pass (George): there is no brake pedal. The first drag that
+   starts anywhere on the touch layer steers (and is the flight stick
+   in the air); a second finger held down is the stabilize hold, in the
+   air only. The handbrake lives ONLY in its circle: the HB button is a
+   separate element stacked above the touch layer, so a press that
+   starts on the circle never reaches the layer and can never steer,
+   and a steering drag keeps pointer capture on the layer, so a drag
+   that wanders across the circle never brakes. Press origin decides,
+   by construction. */
+var dragPtr = null, stabPtr = null, hbOn = false, tapQueued = false;
 var keys = {};
 var touchLayer = document.getElementById('touchLayer');
 touchLayer.addEventListener('pointerdown', function (e) {
   e.preventDefault();
   var p = { id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY };
-  if (e.clientX < window.innerWidth / 2 && !leftPtr) leftPtr = p;
-  else if (!rightPtr) rightPtr = p;
+  if (!dragPtr) dragPtr = p;
+  else if (!stabPtr) stabPtr = p;
   try { touchLayer.setPointerCapture(e.pointerId); } catch (err) {}
 });
 touchLayer.addEventListener('pointermove', function (e) {
-  if (leftPtr && e.pointerId === leftPtr.id) { leftPtr.x = e.clientX; leftPtr.y = e.clientY; }
-  if (rightPtr && e.pointerId === rightPtr.id) { rightPtr.x = e.clientX; rightPtr.y = e.clientY; }
+  if (dragPtr && e.pointerId === dragPtr.id) { dragPtr.x = e.clientX; dragPtr.y = e.clientY; }
+  if (stabPtr && e.pointerId === stabPtr.id) { stabPtr.x = e.clientX; stabPtr.y = e.clientY; }
 });
 function endPtr(e) {
-  if (leftPtr && e.pointerId === leftPtr.id) leftPtr = null;
-  if (rightPtr && e.pointerId === rightPtr.id) rightPtr = null;
+  if (dragPtr && e.pointerId === dragPtr.id) dragPtr = null;
+  if (stabPtr && e.pointerId === stabPtr.id) stabPtr = null;
 }
 touchLayer.addEventListener('pointerup', endPtr);
 touchLayer.addEventListener('pointercancel', endPtr);
@@ -1638,17 +1663,16 @@ window.addEventListener('keyup', function (e) { keys[e.code] = false; });
 
 function buildInput() {
   var car = game.car;
+  /* brake stays false forever: no control in this shell sets it. The
+     handbrake (the HB circle, or Space / B on keys) is the only brake. */
   var input = { steer: 0, brake: false, handbrake: hbOn, airPitch: 0, airRoll: 0, stabilize: false, tap: tapQueued };
-  if (leftPtr) {
-    var dx = (leftPtr.x - leftPtr.ox) / 55, dy = (leftPtr.y - leftPtr.oy) / 55;
+  if (dragPtr) {
+    var dx = (dragPtr.x - dragPtr.ox) / 55, dy = (dragPtr.y - dragPtr.oy) / 55;
     input.steer = CF.clamp(dx, -1, 1);
     input.airRoll = CF.clamp(dx, -1, 1);
     input.airPitch = CF.clamp(dy, -1, 1); // drag down = nose up = backflip
   }
-  if (rightPtr) {
-    if (car.mode === 'air') input.stabilize = true;
-    else if (rightPtr.y > window.innerHeight * 0.42) input.brake = true;
-  }
+  if (stabPtr && car.mode === 'air') input.stabilize = true; // second-finger hold: a flight control, not a brake
   if (settings.controls === 'buttons') {
     var bs = (steerBtn.r ? 1 : 0) - (steerBtn.l ? 1 : 0);
     input.steer = bs;
@@ -1662,7 +1686,7 @@ function buildInput() {
   if (keys.ArrowLeft) { input.steer -= 1; input.airRoll -= 1; }
   if (keys.ArrowDown) input.airPitch += 1;
   if (keys.ArrowUp) input.airPitch -= 1;
-  if (keys.Space) { if (car.mode === 'air') input.stabilize = true; else input.brake = true; }
+  if (keys.Space) { if (car.mode === 'air') input.stabilize = true; else input.handbrake = true; }
   if (keys.KeyB) input.handbrake = true;
   input.steer = CF.clamp(input.steer, -1, 1);
   input.airRoll = CF.clamp(input.airRoll, -1, 1);
@@ -1831,6 +1855,14 @@ document.addEventListener('visibilitychange', function () {
 
 /* ---------- camera ---------- */
 var camYaw = Math.PI, camDist = 26, camH = 12, wingT = 0, orbitT = 0;
+/* Speed fraction for camera and FOV: linear across the old 0..170 m/s
+   range (the approved feel), then a saturating tail past it, because
+   speed has no ceiling now (Control Pass). The fraction passes 1 at
+   170 and reaches about 1.32 at 470 m/s, 1.43 at 770 m/s, so pull-back
+   and FOV keep responding without ever running away. */
+function spdFracExt(spd) {
+  return spd <= 170 ? spd / 170 : 1 + 0.5 * (1 - Math.exp(-(spd - 170) / 300));
+}
 var camN = { x: 0, y: 1, z: 0 }; // smoothed surface normal at the car: the chase frame lives in it
 function lerpAngle(a, b, t) {
   var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
@@ -1851,7 +1883,7 @@ function updateCamera(dt) {
   }
   var air = car.mode === 'air';
   var spd0 = car.mode === 'ground' ? Math.abs(car.speed) : Math.sqrt(car.vx * car.vx + car.vz * car.vz);
-  var spdFrac = CF.clamp(spd0 / 170, 0, 1);
+  var spdFrac = spdFracExt(spd0);
   camYaw = lerpAngle(camYaw, car.heading, 1 - Math.exp(-dt * (air ? 1.1 : 3.6)));
   /* Chase distance and height scale with speed, and the camera pulls
      well back on the long airs so the landing zone (and the blob shadow
@@ -1887,8 +1919,8 @@ function updateCamera(dt) {
   camera.up.set(0, 1, 0); // horizon locked, architecturally
   camera.lookAt(car.x + Tx * 3 + Nx * 1.2, car.y + Ty * 3 + Ny * 1.2, car.z + Tz * 3 + Nz * 1.2);
   var spd = car.mode === 'ground' ? Math.abs(car.speed) : Math.sqrt(car.vx * car.vx + car.vz * car.vz);
-  var fovT = 62 + 14 * CF.clamp(spd / 170, 0, 1) + (air ? 4 * Math.min(car.airTime, 1) : 0);
-  fovT = Math.min(fovT, 82);
+  var fovT = 62 + 14 * spdFracExt(spd) + (air ? 4 * Math.min(car.airTime, 1) : 0);
+  fovT = Math.min(fovT, 82); // the comfort cap stays, even though speed does not
   if (Math.abs(camera.fov - fovT) > 0.05) { camera.fov += (fovT - camera.fov) * (1 - Math.exp(-dt * 3)); camera.updateProjectionMatrix(); }
 }
 
@@ -2237,7 +2269,13 @@ function frame(game, input) {
     if (!eng) return;
     var spd = car.mode === 'ground' ? Math.abs(car.speed || 0)
       : Math.sqrt((car.vx || 0) * (car.vx || 0) + (car.vz || 0) * (car.vz || 0));
-    var n = Math.max(0, Math.min(1, spd / 136)), t = ctx.currentTime;
+    /* Engine pitch range rescaled (Control Pass): linear to 0.8 at the
+       old 170 m/s top end, then a saturating tail, so the note keeps
+       climbing past 170 (about 0.92 at 420, 0.99 at 1000) instead of
+       pinning the way it did at 136. */
+    var n = spd <= 170 ? spd / 212.5 : 0.8 + 0.2 * (1 - Math.exp(-(spd - 170) / 250));
+    n = Math.max(0, Math.min(1, n));
+    var t = ctx.currentTime;
     var air = car.mode === 'air', live = running && enabledFlag;
     eng.o1.frequency.setTargetAtTime(50 + n * 95, t, 0.09);
     eng.o2.frequency.setTargetAtTime(25 + n * 47, t, 0.09);
