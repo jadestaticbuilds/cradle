@@ -308,9 +308,9 @@
   <div id="howtoPanel">
     <h3>HOW TO PLAY</h3>
     <div class="hsec"><h4>DRIVE</h4><p>Drag anywhere on the screen to steer. The car accelerates on its own, and there is no speed limit: speed keeps building while your line is clean, and turning is what costs you speed, so carve gently and save the hard turns for when you mean them. The round HB button is the only brake there is, a handbrake for tight turns and hard stops. Only a press that starts on the button itself brakes; a steering drag that crosses it does nothing.</p></div>
-    <div class="hsec"><h4>FLY</h4><p>The moment you leave the ground, that same drag becomes a flight stick. Drag down for a backflip, up for a front flip, sideways to roll, and diagonal for combos. Hold a second finger down to stabilize: your rotation settles, the car glides, and you can set it down level.</p></div>
-    <div class="hsec"><h4>SCORE</h4><p>Points stay pending while you are in the air and only bank when you land. Clean landings bank in full and grow the combo. A bad landing loses the whole air, but the car always rights itself and keeps rolling. Nothing stops you. Coins pay 250 each. Take off again within 3 seconds of landing to keep the combo alive.</p></div>
-    <p class="hmode">THE VALLEY: one endless bowl, walls on both sides. Ride up one wall, launch off the lip, land on the far wall, and let every crossing throw you higher. The gold coins trace the riding lines. In the last minute the walls steepen, and the same lines throw you further. Over the rim is open sky and a long fall: you lose the air, and the run puts you back on the valley floor. Three minutes. Spend the height.</p>
+    <div class="hsec"><h4>FLY</h4><p>The moment you leave the ground, that same drag becomes a flight stick. Drag down for a backflip, up for a front flip, sideways to roll, and diagonal for combos. Hold a second finger down to stabilize: your rotation settles, the car glides, and the sail stretches. On the big one, the glide is the whole game: trade tricks for distance, or spin early and stabilize late.</p></div>
+    <div class="hsec"><h4>SCORE</h4><p>Points stay pending while you are in the air and only bank when you land. Flight distance pays 1 point per meter on any sail of 150 meters or more, banked with the air when you touch down. Clean landings bank in full and grow the combo. A bad landing loses the whole air, but the car always rights itself and keeps rolling. Nothing stops you. Coins pay 250 each. Take off again within 3 seconds of landing to keep the combo alive.</p></div>
+    <p class="hmode">THE DROP: one endless cycle. A steep chute drops you half a kilometer and the speed just keeps coming, then one giant ramp throws you into a sail measured in kilometers over the landing bowl. Touch down on the slope, roll out, and the next chute is already waiting, one degree steeper than the last. The gold coins trace the fast line down the chute and the ideal arc through the sky. Miss the world entirely and you fall: you lose the air, and the run puts you back on the rollout. Three minutes. Send it.</p>
     <button class="bigBtn" id="howtoClose">DONE</button>
   </div>
 
@@ -320,8 +320,8 @@
     <div id="loadingLine">LOADING</div>
     <div class="modeCards">
       <button class="modeCard" id="startBtn">
-        <span class="mcName">RIDE THE VALLEY</span>
-        <span class="mcDesc">Three minutes. Ride wall to wall, launch off the lips, and spend the height on tricks.</span>
+        <span class="mcName">TAKE THE DROP</span>
+        <span class="mcDesc">Three minutes. One endless chute, one giant ramp, and the longest sail you can stick.</span>
         <span class="mcBest" id="startBest"></span>
       </button>
     </div>
@@ -353,7 +353,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script id="core">
-/* CRADLE core: pure physics, the U-profile valley surface, scoring. No DOM, no Three.
+/* CRADLE core: pure physics, the launch-cycle heightfield, scoring. No DOM, no Three.
    The node harness extracts this exact block and tests it as shipped. */
 (function (global) {
 'use strict';
@@ -516,9 +516,12 @@ function createScoring(tune) {
     return (now - st.lastTouchdown) <= tune.grace;
   };
   S.peek = function (rot) { return computeTricks(rot, st.trickCounts); };
-  S.endAir = function (rot, band, now) {
+  /* distPts (optional, default 0): flight-distance points joining the
+     pending for this air (Cradle's sail scoring, 1 pt per meter). The
+     T-series calls omit it, so their numbers are untouched. */
+  S.endAir = function (rot, band, now, distPts) {
     var calc = computeTricks(rot, st.trickCounts);
-    var pending = calc.pending, banked = 0, i;
+    var pending = calc.pending + (distPts || 0), banked = 0, i;
     st.airActive = false;
     if (band === 'bad') {
       endCombo();
@@ -561,101 +564,207 @@ function createRunClock(duration) {
   return c;
 }
 
-/* ---------------- CRADLE WORLD: one endless U-profile valley ---------
-   A halfpipe the size of a valley (team brainstorm, George's pick). The
-   world is a single heightfield: station s runs along the valley toward
-   -z, lateral lat is x across it, and the cross-section is a smooth U:
-     floor   |lat| <= floorHalf(s)          height 0
-     wall    floorHalf < |lat| <= halfW     a Hermite curve rising to
-                                            wallH(s), concave all the
-                                            way, lip tangent factor m:
-                                            lip gradient = m / 1.15
-     rim     halfW < |lat| <= halfW + 12    a plateau at wallH(s)
-     void    beyond the rim                 open air, the cloud sea,
-                                            and the fall
-   The profile is ANALYTIC in (s, lat): no integrator, no sample window,
-   so a surface query is exact and bit-identical forever, at 100 m or at
-   100 km. The valley breathes with s: wall height swells 23 to 31 m,
-   the floor width swells 20 to 32 m, the wall run is always 1.15 times
-   the wall height (so the lip gradient is the same everywhere: the
-   Hermite's exit tangent m, divided by 1.15).
-   The last minute of the 3-minute run steepens the walls (the
-   brainstorm's session spec): cradleSteep ramps 0 to 1, wall height
-   grows 18% and the lip tangent factor 2.30 to 2.65, taking the lip
-   gradient from 2.00 to 2.30. Both stay under the ground step's face
-   threshold (a substep may rise about 1.05 m; the steepest lip rises
-   0.92 m), so the wall is rideable to the lip in every minute.
-   Solidity: a heightfield has no side to phase through except one, the
-   rim cliff, and cradleSideCollide (in the car sim) guards exactly
-   that: an airborne car entering the span below the surface is ejected
-   back out the cliff face. Over the lip is legal air; the rim is
-   drivable; past the rim is the fall, resolved with a respawn on the
-   valley floor (the run, and its clock, continue). */
-var CRADLE_RIM_W = 12;
+/* ---------------- CRADLE WORLD: the endless launch cycle -------------
+   George's redirect (Nov 15, 2026): the halfpipe is gone. The world is
+   one repeating cycle along the station axis s (toward -z), a single
+   heightfield h(s, lat) = spine(s) + cross(params(s), lat):
+
+     STEEPEN  u 0..260      grade eases 0 to -tan(grade) (Hermite)
+     CHUTE    u 260..760    500 m at full grade: the downhill fall
+     RAMP     u 760..866    Hermite sweep up to the 40 deg lip tangent,
+                            23.7 m of structure above its low point
+     CAP      u 866..880    the lip rounds over the top (a sharp crest
+                            corner would smear in the surface normals
+                            and bend the exit velocity down the back;
+                            the rounded cap sheds the car at the lip
+                            angle instead)
+     LIPBACK  u 880..904    the back of the jump, falling away steeply
+     LAND A   u 904..1854   landing slope, grade -0.60 easing to -0.33
+     LAND B   u 1854..3304  landing slope shallowing to -0.055
+     ROLLOUT  u 3304..3700  near flat, flows into the next cycle
+
+   Cycle length 3700 m, drop about 1149 m per cycle. CYCLE RAMP RULE:
+   the chute grade starts at 33 deg and gains 1 deg per completed
+   cycle, capped at 37 deg from cycle 5 on (difficulty inside the run,
+   per George's standing rule); segment lengths never change, so cycle
+   n is always [n*L, (n+1)*L), and flights that overshoot land in later
+   cycles' landing bowls by design.
+
+   Cross-sections phase-blend along the cycle: chute and ramp get
+   near-vertical linear rock walls (gradient 40, far past the face
+   threshold, so contact slides along them and the tangent projection
+   cancels the outward velocity: a wall hit deflects, it never stops
+   the car and never lets it through), the landing bowl and rollout
+   get the wide Hermite U. Everything is analytic: the shell mesh
+   samples the same functions the physics reads. */
+var CRADLE_L = 3700;
+var CRADLE_LIP_U = 871;          /* station of the lip crest inside a cycle */
+var CRADLE_LAND_U0 = 904, CRADLE_LAND_U1 = 3304;
+var CRADLE_ROLL_U = 3400;        /* respawn station inside a cycle */
+var CRADLE_LIP_TAN = Math.tan(40 * Math.PI / 180);
 var cradleFallVoid = false;
-var cradleSteep = 0; // 0..1, driven by the run clock in cradleUpdate
-function cradleFloorHalf(s) { return 13 + 3 * Math.sin(2 * Math.PI * s / 1500 + 0.7); }
-function cradleWallHBase(s) { return 27 + 4 * Math.sin(2 * Math.PI * s / 2100 + 2.0); }
+
+/* chute grade per cycle: 33 deg + 1 deg per cycle, capped at 37 deg */
+function cradleGradeTan(n) { return Math.tan((33 + Math.min(n, 4)) * Math.PI / 180); }
+var CRADLE_TAN_PREFIX = [0];
+for (var ctp = 0; ctp < 64; ctp++) CRADLE_TAN_PREFIX.push(CRADLE_TAN_PREFIX[ctp] + cradleGradeTan(ctp));
+function cradleTanPrefix(n) {
+  if (n <= 64) return CRADLE_TAN_PREFIX[n];
+  return CRADLE_TAN_PREFIX[64] + (n - 64) * cradleGradeTan(4);
+}
+/* vertical drop of one full cycle n (closed form of the segment sum) */
+function cradleCycleDrop(n) { return 736 + 635.5 * cradleGradeTan(n); }
+
+/* the spine segments of cycle n: Hermite pieces { len, m0, m1, dh }.
+   Slopes chain continuously everywhere, the lip included: the ramp
+   arrives at +tan(40 deg) and the cap rounds the crest over 14 m, so
+   the surface normal (a finite difference) tracks the real tangent
+   and the car sheds at the lip angle. */
+function cradleSegs(n) {
+  var T = cradleGradeTan(n);
+  return [
+    { len: 260,  m0: 0,               m1: -T,              dh: -135.5 * T }, /* STEEPEN */
+    { len: 500,  m0: -T,              m1: -T,              dh: -500 * T },   /* CHUTE */
+    { len: 106,  m0: -T,              m1: CRADLE_LIP_TAN, dh: 4 },          /* RAMP */
+    { len: 14,   m0: CRADLE_LIP_TAN,  m1: -1.35,         dh: -4 },         /* CAP */
+    { len: 24,   m0: -1.35,           m1: -0.60,         dh: -23 },        /* LIPBACK */
+    { len: 950,  m0: -0.60,           m1: -0.33,          dh: -430 },       /* LAND A */
+    { len: 1450, m0: -0.33,           m1: -0.055,         dh: -272 },       /* LAND B */
+    { len: 396,  m0: -0.055,          m1: 0,              dh: -11 }         /* ROLLOUT */
+  ];
+}
+function cradleHermite(t, len, m0, m1, dh) {
+  var t2 = t * t, t3 = t2 * t;
+  return (t3 - 2 * t2 + t) * len * m0 + (3 * t2 - 2 * t3) * dh + (t3 - t2) * len * m1;
+}
+/* spine height (the heightfield centerline) at station s */
+function cradleCenterH(s) {
+  if (s <= 0) return 0;
+  var n = Math.floor(s / CRADLE_L), u = s - n * CRADLE_L;
+  var h = -(736 * n + 635.5 * cradleTanPrefix(n)), segs = cradleSegs(n), acc = 0, i, g, t;
+  for (i = 0; i < segs.length; i++) {
+    g = segs[i];
+    if (u <= acc + g.len || i === segs.length - 1) {
+      t = (u - acc) / g.len; if (t < 0) t = 0; if (t > 1) t = 1;
+      return h + cradleHermite(t, g.len, g.m0, g.m1, g.dh);
+    }
+    h += g.dh; acc += g.len;
+  }
+  return h;
+}
+function cradleGradeAt(s) { return (cradleCenterH(s + 1.5) - cradleCenterH(s - 1.5)) / 3; }
+
+/* cross-section parameter sets per phase. shape 1 = the linear rock
+   wall (constant gradient wallH / run = 40: a face, not a road, at
+   every height), shape 0 = the Hermite U with lip tangent factor m. */
+var CRADLE_P_CHUTE = { floorHalf: 13, wallH: 20, run: 0.5, shape: 1, m: 2.3, rimW: 8 };
+var CRADLE_P_LAND  = { floorHalf: 26, wallH: 22, run: 26, shape: 0, m: 2.3, rimW: 12 };
+var CRADLE_P_ROLL  = { floorHalf: 20, wallH: 14, run: 16, shape: 0, m: 2.3, rimW: 10 };
+var CRADLE_PARAM_KEYS = [
+  { u: 60,   P: CRADLE_P_CHUTE },
+  { u: 830,  P: CRADLE_P_CHUTE },
+  { u: 950,  P: CRADLE_P_LAND },
+  { u: 3220, P: CRADLE_P_LAND },
+  { u: 3380, P: CRADLE_P_ROLL },
+  { u: 3640, P: CRADLE_P_ROLL }
+];
+function cradleLerpParams(A, B, t) {
+  return {
+    floorHalf: A.floorHalf + (B.floorHalf - A.floorHalf) * t,
+    wallH: A.wallH + (B.wallH - A.wallH) * t,
+    run: A.run + (B.run - A.run) * t,
+    shape: A.shape + (B.shape - A.shape) * t,
+    m: A.m + (B.m - A.m) * t,
+    rimW: A.rimW + (B.rimW - A.rimW) * t
+  };
+}
+function cradleFinishParams(P) {
+  P.halfW = P.floorHalf + P.run;
+  P.rimEdge = P.halfW + P.rimW;
+  return P;
+}
+/* cross-section params at station s (smooth blends, periodic across
+   the cycle seam: the rollout eases into the next chute) */
 function cradleParams(s) {
   if (s < 0) s = 0;
-  var wallH = cradleWallHBase(s) * (1 + 0.18 * cradleSteep);
-  var floorHalf = cradleFloorHalf(s);
-  var run = wallH * 1.15;
-  return { s: s, wallH: wallH, floorHalf: floorHalf, run: run,
-           halfW: floorHalf + run, rimEdge: floorHalf + run + CRADLE_RIM_W,
-           m: 2.3 + 0.35 * cradleSteep };
+  var u = s - Math.floor(s / CRADLE_L) * CRADLE_L, K = CRADLE_PARAM_KEYS, i, k0, k1, u0, u1, uu, t;
+  for (i = 0; i < K.length; i++) {
+    k0 = K[i]; k1 = K[(i + 1) % K.length];
+    u0 = k0.u; u1 = k1.u + (i === K.length - 1 ? CRADLE_L : 0);
+    uu = u; if (i === K.length - 1 && uu < u0) uu += CRADLE_L;
+    if (uu >= u0 && uu <= u1) {
+      t = (uu - u0) / (u1 - u0); t = t * t * (3 - 2 * t);
+      return cradleFinishParams(cradleLerpParams(k0.P, k1.P, t));
+    }
+  }
+  return cradleFinishParams(cradleLerpParams(CRADLE_P_CHUTE, CRADLE_P_CHUTE, 0));
 }
-function cradleProfileH(P, lat) {
-  var u = Math.abs(lat);
+/* cross-section height above the spine; null past the rim (void) */
+function cradleCrossH(P, lat) {
+  var u = Math.abs(lat), t, herm, wall, f;
   if (u <= P.floorHalf) return 0;
   if (u <= P.halfW) {
-    var t = (u - P.floorHalf) / P.run, m = P.m;
-    return P.wallH * ((3 - m) * t * t + (m - 2) * t * t * t);
+    t = (u - P.floorHalf) / P.run;
+    herm = (3 - P.m) * t * t + (P.m - 2) * t * t * t;
+    wall = t;
+    f = P.shape <= 0 ? herm : P.shape >= 1 ? wall : herm + (wall - herm) * P.shape;
+    return P.wallH * f;
   }
   if (u <= P.rimEdge) return P.wallH;
-  return null; // open air past the rim
+  return null;
 }
 function cradleHeightAt(x, z) {
-  var h = cradleProfileH(cradleParams(-z), x);
-  return h === null ? -1e9 : h;
+  if (cradleFallVoid) return -1e9;
+  var s = -z, c = cradleCrossH(cradleParams(s), x);
+  if (c === null) return -1e9;
+  return cradleCenterH(s) + c;
 }
-/* The profile height with lat clamped into the span: the surface plane
-   extended sideways past the rim (fall tests, landing guards, shadow). */
+/* height on the extended plane (lateral clamped to the rim): the world
+   the car visually rests on past the edge, and the fall reference */
 function cradleHeightExt(x, z) {
-  var P = cradleParams(-z);
-  var h = cradleProfileH(P, clamp(x, -P.rimEdge, P.rimEdge));
-  return h === null ? P.wallH : h;
+  var s = Math.max(0, -z), P = cradleParams(s);
+  var lat = clamp(x, -P.rimEdge, P.rimEdge);
+  var c = cradleCrossH(P, lat);
+  return cradleCenterH(s) + (c === null ? P.wallH : c);
 }
 function cradleSurfAt(x, z) {
-  if (cradleFallVoid) return surf(-1e9, 0, 0, 'void', 0);
-  var h = cradleHeightAt(x, z);
-  if (h < -1e8) return surf(-1e9, 0, 0, 'void', 0);
   var e = 0.6;
+  var hC = cradleHeightExt(x, z);
+  var inSpan = cradleHeightAt(x, z) > -1e8 && !cradleFallVoid;
   var gx = (cradleHeightExt(x + e, z) - cradleHeightExt(x - e, z)) / (2 * e);
   var gz = (cradleHeightExt(x, z + e) - cradleHeightExt(x, z - e)) / (2 * e);
-  return surf(h, gx, gz, 'cradle', 0);
+  var inv = 1 / Math.sqrt(gx * gx + 1 + gz * gz);
+  return { h: hC, nx: -gx * inv, ny: inv, nz: -gz * inv, inSpan: inSpan, zone: 'cradle' };
 }
 var CRADLE = {
-  surfAt: cradleSurfAt, heightAt: cradleHeightAt, heightExt: cradleHeightExt,
+  surfAt: cradleSurfAt,
+  heightAt: cradleHeightAt,
+  heightExt: cradleHeightExt,
   paramsAt: function (s) { return cradleParams(s); },
+  /* FULL height (spine + cross) at a station/lateral; -1e9 past rim */
   profileH: function (s, lat) {
-    var h = cradleProfileH(cradleParams(s), lat);
-    return h === null ? -1e9 : h;
+    var c = cradleCrossH(cradleParams(s), lat);
+    return c === null ? -1e9 : cradleCenterH(Math.max(0, s)) + c;
   },
-  lipGradient: function (s) {
-    var P = cradleParams(s);
-    var h1 = cradleProfileH(P, P.halfW), h0 = cradleProfileH(P, P.halfW - 2);
-    return (h1 - h0) / 2;
+  centerH: cradleCenterH,
+  gradeAt: cradleGradeAt,
+  cycleDrop: cradleCycleDrop,
+  cycleAt: function (s) {
+    var ss = Math.max(0, s), n = Math.floor(ss / CRADLE_L);
+    return { n: n, u: ss - n * CRADLE_L };
   },
   pointAt: function (s) {
     var P = cradleParams(s);
-    return { x: 0, z: -s, h: 0, halfW: P.halfW, rimEdge: P.rimEdge,
+    return { x: 0, z: -s, h: cradleCenterH(Math.max(0, s)), halfW: P.halfW, rimEdge: P.rimEdge,
              wallH: P.wallH, floorHalf: P.floorHalf, run: P.run };
   },
-  setSteep: function (v) { cradleSteep = clamp(v, 0, 1); },
-  steep: function () { return cradleSteep; },
-  rimW: CRADLE_RIM_W,
-  reset: function () { cradleFallVoid = false; cradleSteep = 0; }
+  L: CRADLE_L,
+  LIP_U: CRADLE_LIP_U,
+  LAND_U0: CRADLE_LAND_U0,
+  LAND_U1: CRADLE_LAND_U1,
+  ROLL_U: CRADLE_ROLL_U,
+  lipAngleDeg: 40,
+  reset: function () { cradleFallVoid = false; }
 };
 
 /* ---------------- the car simulation ---------------- */
@@ -680,8 +789,8 @@ function createGame(tune) {
             now: 0, coinsCollected: 0, events: [], started: false, over: false,
             cradle: null };
 
-  /* The only world is the valley. Every surface query goes to the one
-     cradle surface function; there are no stacked structures. */
+  /* The only world is the launch cycle. Every surface query goes to
+     the one cradle surface function; there are no stacked structures. */
   function surfList(x, z) { return [cradleSurfAt(x, z)]; }
   function surfTerrain(x, z) { return cradleSurfAt(x, z); }
   function surfBelow(x, z, y) { return cradleSurfAt(x, z); }
@@ -698,15 +807,18 @@ function createGame(tune) {
   }
   function placeCar() { placeCarAt(0, 0, 0); }
   /* The fall's price: the combo ends (the pending air is lost, exactly
-     the bad-landing rule) and the car restarts on the valley floor at
-     the station it fell from, rolling. The clock never stopped. */
+     the bad-landing rule, and a flight that ends in a fall banks no
+     distance) and the car restarts on the ROLLOUT of the cycle it fell
+     in, rolling. The clock never stopped. */
   function respawnCar() {
     scoring.endCombo();
     scoring.state.airActive = false;
     clock.onLanded(); // a fall during the buzzer air still ends the run cleanly
-    placeCarAt(Math.max(0, -car.z), 0, 25);
+    g.cradle.flightStart = null;
+    var cyc = Math.floor(Math.max(0, -car.z) / CRADLE_L);
+    placeCarAt(cyc * CRADLE_L + CRADLE_ROLL_U, 0, 25);
   }
-  placeCar(); // the menu parks the car on the valley floor
+  placeCar(); // the menu parks the car at the top of the chute
 
   g.reset = function (opts) {
     scoring.reset();
@@ -714,8 +826,9 @@ function createGame(tune) {
     g.coins = coins;
     g.coinsCollected = 0; g.events = []; g.now = 0; g.over = false; g.started = true;
     clock = createRunClock(180); g.clock = clock;
-    cradleFallVoid = false; cradleSteep = 0;
-    g.cradle = { falls: 0, falling: false, fallT: 0, nextCoinS: 120, coinGroup: 0 };
+    cradleFallVoid = false;
+    g.cradle = { falls: 0, falling: false, fallT: 0, coinCycle: 0,
+                 bestFlight: 0, flightStart: null, lastFlight: 0 };
     placeCar();
     clock.start();
   };
@@ -879,6 +992,7 @@ function createGame(tune) {
       car.vx = tv.x; car.vy = tv.y; car.vz = tv.z;
       car.mode = 'air'; car.airTime = 0; car.wings = false; car.corkscrew = false;
       car.accPitch = 0; car.accRoll = 0; car.accYaw = 0; car.wx = 0; car.wy = 0; car.wz = 0;
+      g.cradle.flightStart = { x: car.x, z: car.z };
       scoring.beginAir(g.now);
       g.events.push({ type: 'takeoff' });
     }
@@ -904,10 +1018,26 @@ function createGame(tune) {
     if (ang > tune.badAngle) band = 'bad';
     else if (ang > tune.cleanAngle || impact > IMPACT_ROUGH) band = 'rough';
     else band = 'clean';
+    /* Flight distance (Rosa): horizontal meters from the takeoff point
+       to this touchdown, scored at 1 pt per meter into the pending when
+       the sail was a real one (150 m or more). Short hops score nothing
+       for distance. A fall never reaches land(), so it banks none. */
+    var fdist = 0, distPts = 0;
+    if (g.cradle.flightStart) {
+      var fdx = car.x - g.cradle.flightStart.x, fdz = car.z - g.cradle.flightStart.z;
+      fdist = Math.sqrt(fdx * fdx + fdz * fdz);
+      if (fdist >= 150) {
+        distPts = Math.round(fdist);
+        if (fdist > g.cradle.bestFlight) g.cradle.bestFlight = fdist;
+        g.cradle.lastFlight = fdist;
+      }
+      g.cradle.flightStart = null;
+    }
     var res = scoring.endAir({ pitch: car.accPitch * 180 / Math.PI, roll: car.accRoll * 180 / Math.PI,
-                               yaw: car.accYaw * 180 / Math.PI, airtime: car.airTime }, band, g.now);
+                               yaw: car.accYaw * 180 / Math.PI, airtime: car.airTime }, band, g.now, distPts);
     g.events.push({ type: 'landed', band: band, banked: res.banked, pending: res.pending,
-                    tricks: res.tricks, mult: res.multAfter });
+                    tricks: res.tricks, mult: res.multAfter,
+                    distance: fdist, distPts: distPts });
     clock.onLanded();
     car.wings = false;
     car.y = s.h + WHEEL; car.surf = s;
@@ -1015,45 +1145,55 @@ function createGame(tune) {
     }
   }
 
-  /* Coins ride the riding lines: groups of five along a wall line
-     (alternating sides and heights), then a floor group, so the coin
-     line teaches the wall-to-wall rhythm. Lip-arc groups sit at t=0.9,
-     where the launch begins. */
-  var COIN_PATTERNS = [
-    { side: -1, t: 0.55 }, { side: 1, t: 0.55 }, { side: -1, t: 0.9 },
-    { side: 1, t: 0.9 }, { side: 0, t: 0 }
-  ];
+  /* Coins ride the cycle's three lines: down the chute's clean line,
+     along the reference sail's arc (a launch at the measured exit
+     speed for that cycle's grade, at the 40 deg lip, plain
+     ballistics, so a flight on the ideal line threads them), and down
+     the landing bowl's center line. Dealt a whole cycle at a time,
+     far enough ahead to cover a full sail. */
+  function dealCycleCoins(n) {
+    var base = n * CRADLE_L, u, s, t;
+    for (u = 350; u <= 740; u += 65) {
+      s = base + u;
+      coins.push({ x: 0, y: CRADLE.profileH(s, 0) + 3.4, z: -s,
+                   tier: 'cradle', s: s, taken: false });
+    }
+    var lipS = base + CRADLE_LIP_U, lipH = cradleCenterH(lipS);
+    var vRef = 290 + 25 * Math.min(n, 4);
+    var avx = vRef * Math.cos(Math.PI / 4.5), avy = vRef * Math.sin(Math.PI / 4.5);
+    for (t = 1.3; t < 30; t += 0.85) {
+      s = lipS + avx * t;
+      var py = lipH + avy * t - 9 * t * t;
+      if (py < CRADLE.profileH(s, 0) + 2) break;
+      coins.push({ x: 0, y: py + 1.5, z: -s, tier: 'cradle', s: s, taken: false });
+    }
+    for (u = 1050; u <= 3150; u += 175) {
+      s = base + u;
+      coins.push({ x: 0, y: CRADLE.profileH(s, 0) + 3.4, z: -s,
+                   tier: 'cradle', s: s, taken: false });
+    }
+  }
   function dealCradleCoins(cd, sCar) {
-    while (cd.nextCoinS < sCar + 900) {
-      var pat = COIN_PATTERNS[cd.coinGroup % COIN_PATTERNS.length];
-      for (var o = -12; o <= 12; o += 6) {
-        var cs = cd.nextCoinS + o;
-        var P = cradleParams(cs);
-        var lat = pat.side === 0 ? 0 : pat.side * (P.floorHalf + pat.t * P.run);
-        coins.push({ x: lat, y: cradleProfileH(P, lat) + 3.4, z: -cs,
-                     tier: 'cradle', s: cs, taken: false });
-      }
-      cd.nextCoinS += 110;
-      cd.coinGroup++;
+    while (cd.coinCycle * CRADLE_L < sCar + 6500) {
+      dealCycleCoins(cd.coinCycle);
+      cd.coinCycle++;
     }
   }
 
-  /* Per-step world bookkeeping: the last-minute steepening, the coin
-     stream, the fall, and the run-over. The fall: the car is falling
-     when it is airborne, outside the span, moving down, and more than
-     6 m under the rim's extended plane (it can no longer drift back
-     in), or 25 m under the extended plane anywhere. Once called, every
-     surface voids and 2.4 s of falling ends in a respawn on the valley
-     floor; the run and its clock continue. */
+  /* Per-step world bookkeeping: the coin stream, the fall, and the
+     run-over. The fall: the car is falling when it is airborne,
+     outside the span, moving down, and more than 6 m under the rim's
+     extended plane (it can no longer drift back in), or 25 m under
+     the extended plane anywhere. Once called, every surface voids and
+     2.4 s of falling ends in a respawn on the rollout of the cycle it
+     fell in; the run and its clock continue. */
   function cradleUpdate(dt) {
     var cd = g.cradle;
     if (!cd) return;
-    var tl = clock.timeLeft;
-    cradleSteep = tl < 60 ? clamp((60 - tl) / 15, 0, 1) : 0;
     var sCar = Math.max(0, -car.z);
     dealCradleCoins(cd, sCar);
     for (var ci = coins.length - 1; ci >= 0; ci--) {
-      if (coins[ci].s < sCar - 150) coins.splice(ci, 1);
+      if (coins[ci].s < sCar - 200) coins.splice(ci, 1);
     }
     if (!cd.falling && car.mode === 'air') {
       var bottom = car.y - WHEEL;
@@ -1078,7 +1218,8 @@ function createGame(tune) {
       g.over = true;
       g.events.push({ type: 'runover', score: scoring.state.score,
                       bestCombo: scoring.state.maxMult, biggest: scoring.state.biggestBank,
-                      coins: g.coinsCollected, falls: cd.falls });
+                      coins: g.coinsCollected, falls: cd.falls,
+                      bestFlight: cd.bestFlight });
     }
   }
 
@@ -1177,7 +1318,7 @@ var coinMeshes = [], coinPillars = [];
   geo.rotateX(Math.PI / 2);
   var mat = std(0xffc44d, { emissive: 0x7a5200, roughness: 0.6 });
   var pillarGeo = new THREE.CylinderGeometry(0.56, 1.2, 28, 10, 1, true);
-  var coinCount = 42; // fixed mesh pool; the core deals the coins per run and the frame loop syncs and hides
+  var coinCount = 110; // fixed mesh pool; the core deals the coins per run and the frame loop syncs and hides
   for (var i = 0; i < coinCount; i++) {
     var m = new THREE.Mesh(geo, mat);
     m.position.set(0, -100, 0);
@@ -1242,22 +1383,30 @@ var shadowMesh;
 })();
 
 
-/* ---------- the valley: a fixed pool of 100 m segments, recycled from
+/* ---------- the terrain: a fixed pool of 100 m segments, recycled from
    tail to head as the car travels, so per-frame cost is constant
    forever. Vertex heights come from the same surface math as physics
-   (CF.CRADLE), so the visible valley is the valley the car rides on.
+   (CF.CRADLE), so the visible terrain is the terrain the car rides on.
    The pool runs 2,600 m with the car held 400 to 500 m from the tail:
    the far end is always 2,100 to 2,200 m ahead, past the fog's full
-   close at 1,850 m, so the valley never visibly ends in clear air.
+   close at 1,850 m, so the terrain never visibly ends in clear air.
+   At flight speeds the car advances at most about 10 m per frame
+   (600 m/s at 60 fps), a tenth of a segment, and the recycle loop is
+   unbounded, so the window keeps up with any speed the no-cap core
+   can reach; the smoke test drives it at flight speed to prove it.
    The art is the concept photo's mosaic: LARGE irregular triangles
    (rows about 7.7 m apart, wall columns denser toward the lip), each
    grid point jittered ALONG the surface by a deterministic hash of
    its global grid position, so the mesh is stable across segment
    recycling and every vertex height still comes from profileH at
    its jittered position. Lateral jitter tapers to zero at the lip,
-   the rim, and the cliff, so those edges stay clean vertex lines;
-   measured worst chord error against the analytic surface on the
-   wall is 0.28 m. Geometry is non-indexed and every FACE carries
+   the rim, and the cliff, so those edges stay clean vertex lines.
+   Measured chord error against the analytic surface (World Rebuild):
+   0.22 m worst on the ramp transition, inside the 0.35 m discipline;
+   the lip cap, the tightest curve in the world, rounds over by up to
+   1.71 m in the mesh, which is visual only: the car launches from
+   the analytic surface, never from the mesh. Geometry is non-indexed
+   and every FACE carries
    one color, hashed from its world position: floor and rim plateau
    draw only warm sand; walls draw teals weighted toward the mid
    range, with about one face in four sand marbled through, exactly
@@ -1298,14 +1447,17 @@ function valleyVert(sNom, colsNom, c) {
   if (latJ > PJ.rimEdge) latJ = PJ.rimEdge;
   if (latJ < -PJ.rimEdge) latJ = -PJ.rimEdge;
   return { x: latJ, z: -sJ, s: sJ, lat: latJ,
-           y: (cd.skirt ? PJ.wallH - 12 : CF.CRADLE.profileH(sJ, latJ)) + 0.03 };
+           y: (cd.skirt ? CF.CRADLE.profileH(sJ, PJ.rimEdge) - 12 : CF.CRADLE.profileH(sJ, latJ)) + 0.03 };
 }
 var TEAL_DEEP = new THREE.Color(0x1f8a70), TEAL_PALE = new THREE.Color(0xb8ecd4);
 var SAND_LO = new THREE.Color(0xecca9a), SAND_HI = new THREE.Color(0xd9b77c);
 function valleyFaceColor(fg, fc, ft, sC, latC, skirtQuad, out) {
   var PC = CF.CRADLE.paramsAt(Math.max(0, sC));
   var a = Math.abs(latC);
-  var isWall = skirtQuad || (a > PC.floorHalf && a < PC.halfW);
+  /* the ramp's rising faces draw from the wall (teal) family: the jump
+     reads as a built structure, not a sand dune */
+  var isWall = skirtQuad || (a > PC.floorHalf && a < PC.halfW) ||
+               CF.CRADLE.gradeAt(Math.max(0, sC)) > 0.15;
   var hk = fc * 7 + ft * 131;
   var h1 = gridHash(fg, hk + 7), h2 = gridHash(fg, hk + 77), st;
   if (isWall && gridHash(fg, hk + 31) >= 0.25) { // about one wall face in four draws sand instead
@@ -1423,7 +1575,8 @@ var trees = [];
 })();
 function placeTree(t) {
   var P = CF.CRADLE.paramsAt(Math.max(0, t.s));
-  t.mesh.position.set(t.side * (P.halfW + t.off), P.wallH + 0.03, -t.s);
+  var lat = t.side * Math.min(P.halfW + t.off, P.rimEdge - 0.6);
+  t.mesh.position.set(lat, CF.CRADLE.profileH(Math.max(0, t.s), lat) + 0.03, -t.s);
   t.mesh.scale.set(t.scale, t.scale, t.scale);
   t.mesh.rotation.y = t.rot;
 }
@@ -1457,8 +1610,12 @@ var clouds = [];
     clouds.push(cl); placeCloud(cl);
   }
 })();
-function placeCloud(cl) { cl.grp.position.set(cl.x, cl.y, -cl.s); }
+var cloudBaseY = 0; /* clouds ride at a fixed offset above the car: the
+   world descends over a kilometer per cycle, so absolute heights
+   would bury them under the terrain within one cycle */
+function placeCloud(cl) { cl.grp.position.set(cl.x, cl.y + cloudBaseY, -cl.s); }
 function updateClouds(dt) {
+  cloudBaseY = game.car.y;
   var sCar = -game.car.z;
   for (var i = 0; i < clouds.length; i++) {
     var cl = clouds[i];
@@ -1603,14 +1760,17 @@ window.addEventListener('deviceorientation', function (e) {
 /* ---------- game + best ---------- */
 var game = CF.createGame(tune);
 window.CFDebug = { camera: camera, game: game, input: function () { return buildInput(); } }; // test hook: tools/smoke.js asserts the shipped camera's framing geometrically and the shipped input mapping directly
-var crBest = 0;
+var crBest = 0, crBestFlight = 0;
 (function loadBest() {
   var b = parseFloat(localStorage.getItem('cr-best') || '0');
   if (!isNaN(b) && b > 0) crBest = b;
+  var f = parseFloat(localStorage.getItem('cr-best-flight') || '0');
+  if (!isNaN(f) && f > 0) crBestFlight = f;
 })();
 function syncMenuBest() {
   var el = document.getElementById('startBest');
-  if (el) el.textContent = crBest > 0 ? 'BEST · ' + Math.floor(crBest).toLocaleString() : 'NO RUNS YET';
+  if (el) el.textContent = crBest > 0 ? 'BEST · ' + Math.floor(crBest).toLocaleString() +
+    (crBestFlight > 0 ? ' · FLIGHT ' + Math.floor(crBestFlight).toLocaleString() + ' M' : '') : 'NO RUNS YET';
 }
 syncMenuBest();
 
@@ -1717,6 +1877,10 @@ function drainEvents() {
     if (ev.type === 'landed') {
       if (ev.band === 'clean') runStats.clean++;
       if (ev.band === 'bad') { showBanner('BAD LANDING', 'bad', 1200); buzz([40, 25, 40]); }
+      else if (ev.distPts > 0) {
+        showBanner('FLIGHT ' + Math.round(ev.distance).toLocaleString() + ' M · +' + ev.banked.toLocaleString(), ev.band === 'clean' ? '' : 'small', 1500);
+        if (ev.band === 'clean') buzz(15);
+      }
       else if (ev.banked > 0) {
         showBanner((ev.band === 'clean' ? 'CLEAN +' : 'ROUGH +') + ev.banked.toLocaleString(), ev.band === 'clean' ? '' : 'small', 1100);
         if (ev.band === 'clean') buzz(15);
@@ -1727,7 +1891,7 @@ function drainEvents() {
     } else if (ev.type === 'fallStart') {
       showBanner('OFF THE EDGE', 'bad', 1300);
     } else if (ev.type === 'respawn') {
-      showBanner('BACK IN THE VALLEY', 'small', 1100);
+      showBanner('BACK ON THE ROLLOUT', 'small', 1100);
     } else if (ev.type === 'runover') {
       onRunOver(ev);
     }
@@ -1745,16 +1909,20 @@ function onRunOver(ev) {
   var nbEl = document.getElementById('tallyNewBest');
   var newBest = ev.score > crBest && ev.score > 0;
   if (newBest) { crBest = ev.score; try { localStorage.setItem('cr-best', String(ev.score)); } catch (e) {} }
+  var newBestFlight = (ev.bestFlight || 0) > crBestFlight && (ev.bestFlight || 0) > 0;
+  if (newBestFlight) { crBestFlight = ev.bestFlight; try { localStorage.setItem('cr-best-flight', String(Math.floor(ev.bestFlight))); } catch (e) {} }
   document.getElementById('tallyTitle').textContent = 'TIME UP';
   nbEl.style.display = newBest ? 'block' : 'none';
   scoreEl.textContent = Math.floor(ev.score).toLocaleString();
   scoreEl.className = newBest ? 'gold' : '';
   document.getElementById('tallyRows').innerHTML =
+    'BEST FLIGHT <b>' + Math.floor(ev.bestFlight || 0).toLocaleString() + ' M</b><br>' +
     'BIGGEST STUNT <b>' + ev.biggest.toLocaleString() + '</b><br>' +
     'BEST COMBO <b>x' + ev.bestCombo.toFixed(1) + '</b><br>' +
     'COINS <b>' + ev.coins + '</b><br>' +
     'FALLS <b>' + ev.falls + '</b>';
-  document.getElementById('tallyBests').textContent = 'BEST · ' + Math.floor(crBest).toLocaleString();
+  document.getElementById('tallyBests').textContent = 'BEST · ' + Math.floor(crBest).toLocaleString() +
+    (crBestFlight > 0 ? ' · FLIGHT ' + Math.floor(crBestFlight).toLocaleString() + ' M' : '');
   document.getElementById('tallyScreen').style.display = 'flex';
   syncMenuBest();
 }
@@ -1771,7 +1939,7 @@ function updateHUD() {
   var tl = game.clock.timeLeft;
   el.clock.textContent = fmtClock(tl);
   el.clock.className = (tl <= 10.5 && game.clock.phase !== 'ready') ? 'final' : '';
-  el.heatLabel.textContent = (tl < 60 && game.clock.phase === 'running') ? 'FINAL MINUTE · WALLS STEEPEN' : '';
+  el.heatLabel.textContent = (tl < 60 && game.clock.phase === 'running') ? 'FINAL MINUTE' : '';
   if (!final10Shown && tl <= 10.5 && game.clock.phase === 'running') {
     final10Shown = true;
     showBanner('FINAL 10', '', 1000);
@@ -1871,13 +2039,13 @@ function lerpAngle(a, b, t) {
 function updateCamera(dt) {
   var car = game.car;
   if (!game.started) {
-    /* Attract orbit: a slow circle over the valley mouth, the car parked
-       on the floor below, both walls and their tree lines in frame.
-       No roll, ever. Reduced motion freezes it to a static wide shot. */
+    /* Attract orbit: a slow circle over the chute mouth, the car parked
+       at the top, the descent falling away below. No roll, ever.
+       Reduced motion freezes it to a static wide shot. */
     if (!reducedMotion) orbitT += dt;
     camera.position.set(Math.sin(orbitT * 0.045) * 150, 52, -120 + Math.cos(orbitT * 0.045) * 150);
     camera.up.set(0, 1, 0);
-    camera.lookAt(0, 12, -120);
+    camera.lookAt(0, -10, -160);
     if (Math.abs(camera.fov - 55) > 0.1) { camera.fov += (55 - camera.fov) * 0.05; camera.updateProjectionMatrix(); }
     return;
   }
@@ -1917,7 +2085,22 @@ function updateCamera(dt) {
   camera.position.y += (py - camera.position.y) * kp;
   camera.position.z += (pz - camera.position.z) * kp;
   camera.up.set(0, 1, 0); // horizon locked, architecturally
-  camera.lookAt(car.x + Tx * 3 + Nx * 1.2, car.y + Ty * 3 + Ny * 1.2, car.z + Tz * 3 + Nz * 1.2);
+  var lookX = car.x + Tx * 3 + Nx * 1.2, lookY = car.y + Ty * 3 + Ny * 1.2, lookZ = car.z + Tz * 3 + Nz * 1.2;
+  if (air) {
+    /* SAIL FRAMING: as the air lengthens, swing the look target down
+       toward the terrain below and ahead of the car, so the blob
+       shadow (the landing read) and the slope it falls on enter the
+       frame early in the sail instead of at the last second. The
+       weight ramps over the first five seconds: no snap at takeoff. */
+    var gw = Math.min(1, car.airTime / 5) * 0.55;
+    var gs = CF.CRADLE.surfAt(car.x + Tx * 60, car.z + Tz * 60);
+    if (gs && gs.h > -1e8) {
+      lookX += ((car.x + Tx * 60) - lookX) * gw;
+      lookY += ((gs.h + 2) - lookY) * gw;
+      lookZ += ((car.z + Tz * 60) - lookZ) * gw;
+    }
+  }
+  camera.lookAt(lookX, lookY, lookZ);
   var spd = car.mode === 'ground' ? Math.abs(car.speed) : Math.sqrt(car.vx * car.vx + car.vz * car.vz);
   var fovT = 62 + 14 * spdFracExt(spd) + (air ? 4 * Math.min(car.airTime, 1) : 0);
   fovT = Math.min(fovT, 82); // the comfort cap stays, even though speed does not
